@@ -112,26 +112,38 @@ async def lookup(
 
 
 async def _lookup_english(english_term: str) -> str:
-    from api import search_english
+    from api import search_english, extract_plain_text
     try:
         result = await search_english(english_term)
     except Exception as e:
         return f"Error searching for '{english_term}': {e}"
 
-    greek_matches = result.get("greek_matches", [])
-    if not greek_matches:
-        return (f"No Greek words found matching '{english_term}'.\n"
-                f"Try a simpler or different English term.")
+    woodhouse_html = result.get("woodhouse_html", "")
+    greek_words = result.get("greek_words", [])
+    candidates = result.get("candidates", [])
 
-    output_lines = [f"Greek words matching '{english_term}':\n"]
-    for greek_word in greek_matches[:10]:
-        try:
-            headword_data = await fetch_headword(greek_word)
-            entries = headword_data.get("entries", {})
-            content = entries.get("LSJ") or next(iter(entries.values()), "")
-            output_lines.append(render_holonic(greek_word, content))
-        except Exception:
-            output_lines.append(f". {greek_word} [{transliterate(greek_word)}]: (definition unavailable)")
+    if not woodhouse_html:
+        hint = f"\nSimilar entries: {', '.join(candidates[:6])}" if candidates else ""
+        return f"No Greek words found matching '{english_term}'.{hint}"
+
+    # Show the Woodhouse entry (plain text) as the primary result
+    woodhouse_text = extract_plain_text(woodhouse_html)
+    output_lines = [f"Woodhouse English-Greek: '{result.get('matched_entry', english_term)}'\n",
+                    woodhouse_text]
+
+    # Then offer LSJ holonic definitions for each found Greek word
+    if greek_words:
+        output_lines.append(f"\n─── LSJ entries for found Greek words ───")
+        for greek_word in greek_words[:6]:
+            try:
+                headword_data = await fetch_headword(greek_word)
+                entries = headword_data.get("entries", {})
+                content = entries.get("LSJ") or next(iter(entries.values()), "")
+                if content:
+                    output_lines.append(render_holonic(greek_word, content))
+            except Exception:
+                output_lines.append(f". {greek_word} [{transliterate(greek_word)}]: (definition unavailable)")
+
     return "\n".join(output_lines)
 
 
