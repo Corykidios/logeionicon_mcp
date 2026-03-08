@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "logeionicon": {
+      "command": "python",
+      "args": ["C:/c/apps/Logeionicon/logeionicon.py"],
+      "env": {}
+    }
+  }
+}
