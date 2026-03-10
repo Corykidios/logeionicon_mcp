@@ -103,7 +103,7 @@ async def lookup(
             content = f"[Originally {lang} — auto-translated]\n{content}"
 
         if format == "holonic":
-            holonic = render_holonic(lookup_word, content, source=source_name)
+            holonic = await render_holonic(lookup_word, content, source=source_name)
             parts.append(f"[{source_name}]\n{holonic}" if len(filtered) > 1 else holonic)
         else:
             parts.append(f"[{source_name}]\n{content}")
@@ -140,7 +140,7 @@ async def _lookup_english(english_term: str) -> str:
                 entries = headword_data.get("entries", {})
                 content = entries.get("LSJ") or next(iter(entries.values()), "")
                 if content:
-                    output_lines.append(render_holonic(greek_word, content))
+                    output_lines.append(await render_holonic(greek_word, content))
             except Exception:
                 output_lines.append(f". {greek_word} [{transliterate(greek_word)}]: (definition unavailable)")
 
@@ -196,7 +196,7 @@ async def _analyze_word(word: str) -> str:
         headword_data = await fetch_headword(lemma)
         entries = headword_data.get("entries", {})
         content = entries.get("LSJ") or next(iter(entries.values()), "")
-        lines.append(f"  {render_holonic(lemma, content)}")
+        lines.append(f"  {await render_holonic(lemma, content)}")
     except Exception as e:
         lines.append(f"  (Definition unavailable: {e})")
 
@@ -245,7 +245,7 @@ async def favorites(
             headword_data = await fetch_headword(lookup_word)
             entries = headword_data.get("entries", {})
             content = entries.get("LSJ") or next(iter(entries.values()), "")
-            holonic = render_holonic(lookup_word, content)
+            holonic = await render_holonic(lookup_word, content)
             source = "LSJ" if "LSJ" in entries else next(iter(entries.keys()), "unknown")
         except Exception as e:
             holonic = f". {word} [{transliterate(word)}]: (definition fetch failed: {e})"
