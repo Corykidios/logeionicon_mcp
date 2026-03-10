@@ -11,34 +11,25 @@ Punctuation encodes depth of the sense hierarchy:
         periods only between senses
         e.g.  . λόγος [lo.gos]: word, speech. reason, account. ratio, proportion.
 
-    TWO-TIER  (senses + subsenses, no sub-subsenses):
+    TWO-TIER  (senses + subsenses):
         periods between major senses, commas between subsenses
-        e.g.  . ψυχή [psu.chē]: life, vital force. ghost, departed spirit. immortal soul, principle of movement.
+        e.g.  . ψυχή [psu.chē]: life, vital force. ghost, departed spirit. soul, principle of movement.
 
     THREE-TIER  (senses + subsenses + sub-subsenses):
         periods between major senses, semicolons between subsenses,
         commas between sub-subsenses
-        e.g.  . νόμος [no.mos]: usage; custom, established practice; law of a state, decree. melody, musical mode.
+        e.g.  . νόμος [no.mos]: usage; custom, established practice; law of a state, decree. melody; musical mode.
 
 Rules:
     - NO citations (no "Il. 5.296", no "Hdt. 2.123", no author abbreviations)
     - NO parenthetical source notes like "(Homer)" or "(Plato)"
-    - NO grammatical labels unless essential (e.g. "of persons:" → omit)
+    - NO grammatical labels
     - Compress ruthlessly — capture the semantic core only
-    - Choose ONE tier depth for the whole entry (the deepest complexity present)
 """
 
 import re
 import unicodedata
-import httpx
 from bs4 import BeautifulSoup
-
-# ─── LM Studio config ────────────────────────────────────────────────────────
-# LM Studio default OpenAI-compatible endpoint
-LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
-# Model name — LM Studio accepts any string when a model is loaded
-LM_STUDIO_MODEL = "local-model"
-LM_STUDIO_TIMEOUT = 30.0  # seconds — local models can be slow
 
 # ─── Transliteration tables ──────────────────────────────────────────────────
 _GREEK_TO_LATIN = {
@@ -74,7 +65,6 @@ def transliterate(greek_word: str) -> str:
         if i == 0 and has_rough:
             t = 'h' + t
         latin.append(t)
-    # cross-syllable γ+γ/κ/ξ/χ → trailing γ becomes 'n'
     for i in range(len(syllables) - 1):
         if syllables[i] and syllables[i+1]:
             if syllables[i][-1] == 'γ' and syllables[i+1][0] in ('γ','κ','ξ','χ'):
@@ -141,113 +131,118 @@ def strip_html(raw: str) -> str:
         return soup.get_text(separator=" ", strip=True)
     return raw
 
+# ─── Pure-Python holonic extraction ──────────────────────────────────────────
 
-# ─── Holonic rendering via LM Studio ─────────────────────────────────────────
+# Greek Unicode ranges
+_GREEK_RE     = re.compile(r'[\u0370-\u03ff\u1f00-\u1fff\u0300-\u036f]+')
 
-_HOLONIC_SYSTEM = """You are a specialist in Ancient Greek lexicography.
-Your task is to compress a full LSJ dictionary entry into a single-line "holonic definition" following an exact format.
+# Citations: "Il. 5.296", "Hdt. 2.123", "A. Pr. 123", bare "5.296" etc.
+_CITATION_RE  = re.compile(
+    r'\b[A-Z][a-z]{0,5}\.\s*(?:\d[\w.]*)?'   # Hdt., Il., Od., A., S., E.
+    r'|\b[A-Z]{2,6}\.\s*(?:\d[\w.]*)?'        # NT., LXX., LSJ.
+    r'|\b\d+\.\d+\b'                           # bare 5.296
+)
 
-FORMAT RULES — read carefully:
+# Parentheticals: (lyr.), (of persons), (v.l.), (q.v.) etc.
+_PAREN_RE     = re.compile(r'\([^)]{1,80}\)')
 
-The output must be a single line starting with `. WORD [translit]:` followed by the compressed senses.
+# Noise words / grammatical labels
+_NOISE_RE     = re.compile(
+    r'\b(trans\.|intrans\.|absol\.|abs\.|metaph\.|poet\.|prop\.|orig\.'
+    r'|freq\.|perh\.|esp\.|usu\.|mostly|chiefly|always|never|only|once'
+    r'|twice|rarely|rare\.|dub\.|later|hence|also|v\.l\.|cf\.|q\.v\.'
+    r'|ib\.|ibid\.|ap\.|l\.c\.|sub\s+fin\.|fin\.|init\.)\s*',
+    re.IGNORECASE
+)
 
-Choose ONE punctuation tier based on how complex the entry is:
+# Roman numeral / letter sense dividers used in LSJ: "I.", "II.", "A.", "B."
+_SENSE_SPLIT_RE = re.compile(r'(?:^|(?<=[\s.;,]))\s*(?:[IVX]{1,5}|[A-D])\.\s+')
 
-TIER 1 — flat senses (no subsenses needed):
-  Periods separate each sense.
-  Example: . λόγος [lo.gos]: word, speech. reason, account. ratio, proportion.
+# Dashes used as sense separators in LSJ
+_DASH_RE      = re.compile(r'\s*[—–]\s*')
 
-TIER 2 — senses with subsenses (no sub-subsenses):
-  Periods separate major senses. Commas separate subsenses within a sense.
-  Example: . ψυχή [psu.chē]: life, vital force. ghost, departed spirit. immortal soul, principle of movement. butterfly.
-
-TIER 3 — senses with subsenses AND sub-subsenses:
-  Periods separate major senses. Semicolons separate subsenses. Commas separate sub-subsenses.
-  Example: . νόμος [no.mos]: usage; custom, established practice; law of a state, decree. melody; musical mode, tune.
-
-STRICT PROHIBITIONS — violating these invalidates the output:
-  - NO citations: never include "Il. 5.296" or "Hdt. 2.123" or any author+reference
-  - NO author names or abbreviations: not "Homer", not "Plato", not "Hdt.", not "A.", not "S."
-  - NO parenthetical source notes: not "(Homer)", not "(Plato)", not "(lyr.)"
-  - NO grammatical labels: not "trans.", not "intrans.", not "abs.", not "metaph."
-  - NO editorial notes: not "v.l.", not "cf.", not "q.v."
-  - Output must be ONE LINE only — no newlines, no markdown
-
-GOAL: Capture the semantic range of the word as densely as possible.
-Aim for 1–4 major senses. Each sense: 1–5 words. Total output: under 120 words."""
+# English word check (at least 3 letters)
+_ENGLISH_WORD_RE = re.compile(r'[a-zA-Z]{3,}')
 
 
-async def render_holonic(word: str, raw_entry: str, source: str = "LSJ") -> str:
+def _clean_segment(text: str) -> str:
+    """Clean a single sense segment: strip Greek, citations, noise."""
+    text = _GREEK_RE.sub(' ', text)
+    text = _CITATION_RE.sub(' ', text)
+    text = _PAREN_RE.sub(' ', text)
+    text = _NOISE_RE.sub(' ', text)
+    text = _DASH_RE.sub(', ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text.strip(',.;:— ')
+    return text
+
+
+def _best_phrase(segment: str, max_chars: int = 60) -> str:
+    """Extract the most meaningful short phrase from a cleaned segment."""
+    part = segment.split(';')[0].strip()
+    if len(part) > max_chars:
+        part = part[:max_chars].rsplit(' ', 1)[0]
+    return part.strip(',.;:— ')
+
+
+def _has_english(text: str) -> bool:
+    return bool(_ENGLISH_WORD_RE.search(text))
+
+
+def _extract_holonic(word: str, raw_entry: str) -> str:
     """
-    Render a dictionary entry in holonic format using the local LM Studio model.
-    Falls back to a basic cleaned version if LM Studio is not reachable.
+    Pure-Python holonic rendering — fast, no LLM needed.
+    Splits on LSJ sense markers first, then cleans each segment.
+    Falls back to semicolon-splitting if no sense markers found.
     """
     translit = transliterate(word)
     plain = strip_html(raw_entry)
 
-    # Trim to ~2000 chars — enough for any entry, not overwhelming for small models
-    plain_trimmed = plain[:2000]
+    # Strategy 1: split on Roman numeral / letter sense markers
+    # Do this BEFORE citation stripping so "I." isn't eaten by citation regex
+    parts = _SENSE_SPLIT_RE.split(plain)
+    if len(parts) >= 3:
+        senses = []
+        for part in parts[1:]:   # skip preamble before first marker
+            seg = _clean_segment(part)
+            phrase = _best_phrase(seg)
+            if phrase and _has_english(phrase):
+                senses.append(phrase)
+        if len(senses) >= 2:
+            formatted = ". ".join(senses[:4])
+            return f". {word} [{translit}]: {formatted}."
 
-    prompt = (
-        f"Compress this LSJ entry for '{word}' [{translit}] into holonic format.\n\n"
-        f"LSJ ENTRY:\n{plain_trimmed}\n\n"
-        f"OUTPUT (one line, starting with `. {word} [{translit}]:`):"
-    )
+    # Strategy 2: clean whole entry, split on semicolons
+    clean = _clean_segment(plain)
+    clean = re.sub(r'^[^a-z]{0,20}', '', clean).strip()
 
-    try:
-        async with httpx.AsyncClient(timeout=LM_STUDIO_TIMEOUT) as client:
-            resp = await client.post(
-                LM_STUDIO_URL,
-                json={
-                    "model": LM_STUDIO_MODEL,
-                    "messages": [
-                        {"role": "system", "content": _HOLONIC_SYSTEM},
-                        {"role": "user",   "content": prompt},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 200,
-                    "stop": ["\n\n", "LSJ", "Entry"],
-                }
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
+    parts = re.split(r';', clean)
+    senses = []
+    for part in parts:
+        phrase = _best_phrase(part.strip())
+        if phrase and _has_english(phrase) and len(phrase) > 3:
+            senses.append(phrase)
+    if senses:
+        formatted = ". ".join(senses[:4])
+        return f". {word} [{translit}]: {formatted}."
 
-            # Ensure it starts correctly
-            if not text.startswith(". "):
-                # Try to find the holonic line if model prefixed something
-                for line in text.splitlines():
-                    if line.startswith(". "):
-                        text = line
-                        break
-                else:
-                    text = f". {word} [{translit}]: {text}"
-
-            return text
-
-    except (httpx.ConnectError, httpx.ConnectTimeout):
-        # LM Studio not running — return a basic fallback
-        return _fallback_holonic(word, translit, plain)
-    except Exception as e:
-        return _fallback_holonic(word, translit, plain, error=str(e))
+    # Strategy 3: last resort
+    snippet = clean[:80].rsplit(' ', 1)[0].strip(',.;:— ')
+    return f". {word} [{translit}]: {snippet}."
 
 
-def _fallback_holonic(word: str, translit: str, plain: str, error: str = "") -> str:
+# ─── Public async interface (kept async for compatibility with logeionicon.py) ─
+
+async def render_holonic(word: str, raw_entry: str, source: str = "LSJ") -> str:
     """
-    Basic fallback when LM Studio is unavailable.
-    Strips citations and returns the first meaningful line of the entry.
+    Render a dictionary entry in holonic format.
+    Pure-Python extraction — instant, no external dependencies.
     """
-    # Strip citation-heavy content — grab text up to first author abbreviation
-    text = re.sub(r'\b[A-Z][a-z]{0,5}\.\s*\d[\w.]*', '', plain)
-    text = re.sub(r'\s+', ' ', text).strip()
-    # Grab first ~120 chars, cut at a word boundary
-    snippet = text[:120].rsplit(' ', 1)[0].rstrip(',:;—')
-    note = f" [LM Studio offline{': ' + error[:40] if error else ''}]"
-    return f". {word} [{translit}]: {snippet}.{note}"
+    return _extract_holonic(word, raw_entry)
 
 
 def format_holonic_from_parts(word: str, definitions: list) -> str:
-    """Build a holonic entry from pre-extracted definition strings (sync, no LLM)."""
+    """Build a holonic entry from pre-extracted definition strings (sync)."""
     translit = transliterate(word)
     defs_joined = ". ".join(d.strip().rstrip(".") for d in definitions if d.strip())
     if defs_joined and not defs_joined.endswith("."):
