@@ -30,6 +30,20 @@ Logeionicon is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
 
 ---
 
+## Holonic Format
+
+Logeionicon returns definitions in a compact **holonic format** designed for AI contexts — citations stripped, senses separated by periods:
+
+```
+. ψυχή [psu.chē]: life, vital force. ghost, departed spirit. soul, principle of movement.
+. λόγος [lo.gos]: word, speech. reason, argument. ratio, proportion.
+. ἀρετή [a.re.tē]: excellence, goodness. courage, valour. virtue, moral excellence.
+```
+
+Use `format="full"` for the complete raw LSJ entry.
+
+---
+
 ## Requirements
 
 - Python 3.8+
