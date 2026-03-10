@@ -11,7 +11,7 @@ Author: Cory C. Childs (Corykidios)
 """
 
 from mcp.server.fastmcp import FastMCP
-from api import fetch_headword, NON_ENGLISH
+from api import fetch_headword
 from morphology import lemmatize, full_parse
 from favorites import (add_word, remove_word, tag_word, untag_word,
                        list_favorites, search_favorites, get_all_tags,
